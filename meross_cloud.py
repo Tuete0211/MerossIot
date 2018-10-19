@@ -61,6 +61,10 @@ class MerossHttpClient:
             'nonce': nonce
         }
 
+        print("URL: ", url)
+        print("Headers: ", headers)
+        print("Payload", payload)
+
         # Perform the request.
         r = requests.post(url, data=payload, headers=headers)
 
@@ -134,5 +138,3 @@ class AuthenticatedPostException(Exception):
 
 class UnauthorizedException(Exception):
     pass
-
-

@@ -1,4 +1,4 @@
-from supported_devices.power_plugs import Mss310
+from supported_devices.power_plugs import Mss310, Mss425e
 
 def build_wrapper(
         token,
@@ -8,6 +8,11 @@ def build_wrapper(
         device_specs  # type: dict
 ):
     if device_type.lower() == "mss310":
+        print(device_type)
         return Mss310(token, key, user_id,**device_specs)
+    elif device_type.lower() == "mss425e":
+        print(device_type)
+        #return Mss425e(token, key, user_id,**device_specs)
     else:
+        print(device_type.lower())
         return None
