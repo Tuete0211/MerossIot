@@ -15,6 +15,7 @@ l = logging.getLogger("meross_powerplug")
 l.addHandler(StreamHandler(stream=sys.stdout))
 l.setLevel(logging.DEBUG)
 
+
 class ClientStatus(Enum):
     INITIALIZED = auto()
     CONNECTING = auto()
@@ -23,7 +24,7 @@ class ClientStatus(Enum):
     CONNECTION_DROPPED = auto()
 
 
-class  Mss310:
+class Mss310:
     _status_lock = None
     _client_status = None
 
@@ -36,6 +37,10 @@ class  Mss310:
     _uuid = None
     _client_id = None
     _app_id = None
+
+    _device_names = None
+    _device_specs = None
+    _device_status = None
 
     # Topic name where the client should publish to its commands. Every client should have a dedicated one.
     _client_request_topic = None
@@ -85,6 +90,9 @@ class  Mss310:
 
         self._generate_client_and_app_id()
 
+        self._device_specs = kwords
+        self._device_names = [{'name': kwords['devName'], 'channel': None, 'status': 0, 'device': self}]
+
         # Password is calculated as the MD5 of USERID concatenated with KEY
         md5_hash = md5()
         clearpwd = "%s%s" % (self._user_id, self._key)
@@ -92,7 +100,8 @@ class  Mss310:
         hashed_password = md5_hash.hexdigest()
 
         # Start the mqtt client
-        self._channel = mqtt.Client(client_id=self._client_id, protocol=mqtt.MQTTv311)  # ex. app-id -> app:08d4c9f99da40203ebc798a76512ec14
+        self._channel = mqtt.Client(client_id=self._client_id,
+                                    protocol=mqtt.MQTTv311)  # ex. app-id -> app:08d4c9f99da40203ebc798a76512ec14
         self._channel.on_connect = self._on_connect
         self._channel.on_message = self._on_message
         self._channel.on_disconnect = self._on_disconnect
@@ -100,8 +109,8 @@ class  Mss310:
         self._channel.on_log = self._on_log
         self._channel.username_pw_set(username=self._user_id, password=hashed_password)
         self._channel.tls_set(ca_certs=None, certfile=None, keyfile=None, cert_reqs=ssl.CERT_REQUIRED,
-                       tls_version=ssl.PROTOCOL_TLS,
-                       ciphers=None)
+                              tls_version=ssl.PROTOCOL_TLS,
+                              ciphers=None)
 
         self._channel.connect(self._domain, self._port, keepalive=30)
         self._set_status(ClientStatus.CONNECTING)
@@ -141,14 +150,14 @@ class  Mss310:
         self._subscription_count.dec()
 
     def _on_subscribe(self, client, userdata, mid, granted_qos):
-        l.info("Succesfully subscribed!")
+        # l.info("Succesfully subscribed!")
         if self._subscription_count.inc() == 2:
             with self._waiting_subscribers_queue:
                 self._set_status(ClientStatus.SUBSCRIBED)
                 self._waiting_subscribers_queue.notify_all()
 
     def _on_connect(self, client, userdata, rc, other):
-        l.info("Connected with result code %s" % str(rc))
+        # l.info("Connected with result code %s" % str(rc))
         self._set_status(ClientStatus.SUBSCRIBED)
 
         self._set_status(ClientStatus.CONNECTED)
@@ -158,13 +167,13 @@ class  Mss310:
         self._user_topic = "/app/%s/subscribe" % self._user_id
 
         # Subscribe to the relevant topics
-        l.info("Subscribing to topics..." )
+        # l.info("Subscribing to topics...")
         client.subscribe(self._user_topic)
         client.subscribe(self._client_response_topic)
 
     # The callback for when a PUBLISH message is received from the server.
     def _on_message(self, client, userdata, msg):
-        print(msg.topic + " --> " + str(msg.payload))
+        # print(msg.topic + " --> " + str(msg.payload))
 
         # TODO: Message signature validation
 
@@ -216,17 +225,17 @@ class  Mss310:
             "header":
                 {
                     "from": self._client_response_topic,
-                    "messageId": messageId, # Example: "122e3e47835fefcd8aaf22d13ce21859"
-                    "method": method, # Example: "GET",
-                    "namespace": namespace, # Example: "Appliance.System.All",
+                    "messageId": messageId,  # Example: "122e3e47835fefcd8aaf22d13ce21859"
+                    "method": method,  # Example: "GET",
+                    "namespace": namespace,  # Example: "Appliance.System.All",
                     "payloadVersion": 1,
-                    "sign": signature, # Example: "b4236ac6fb399e70c3d61e98fcb68b74",
+                    "sign": signature,  # Example: "b4236ac6fb399e70c3d61e98fcb68b74",
                     "timestamp": timestamp
                 },
             "payload": payload
         }
         strdata = json.dumps(data)
-        print("--> %s" % strdata)
+        # print("--> %s" % strdata)
         self._channel.publish(topic=self._client_request_topic, payload=strdata.encode("utf-8"))
         return messageId
 
@@ -256,6 +265,22 @@ class  Mss310:
 
             return self._ack_response['payload']
 
+    def get_device_specs(self):
+        return self._device_specs
+
+    def set_device_specs(self, specs):
+        self._device_specs = specs
+
+    def get_device_names(self):
+        return self._device_names
+
+    def get_switch_status(self, channel):
+        response = None
+        if 'toggle' in json.dumps(self.get_sys_data()):
+            toggle_status = self.get_sys_data()['all']['control']['toggle']
+            response = toggle_status['onoff']
+        return response
+
     def get_sys_data(self):
         return self._execute_cmd("GET", "Appliance.System.All", {})
 
@@ -265,12 +290,12 @@ class  Mss310:
     def get_wifi_list(self):
         return self._execute_cmd("GET", "Appliance.Config.WifiList", {})
 
-    def turn_on(self):
-        payload = {"toggle":{"onoff":1}}
+    def turn_on(self, channel):
+        payload = {"toggle": {"onoff": 1}}
         return self._execute_cmd("SET", "Appliance.Control.Toggle", payload)
 
-    def turn_off(self):
-        payload = {"toggle":{"onoff":0}}
+    def turn_off(self, channel):
+        payload = {"toggle": {"onoff": 0}}
         return self._execute_cmd("SET", "Appliance.Control.Toggle", payload)
 
     def get_trace(self):
@@ -288,7 +313,8 @@ class  Mss310:
     def get_report(self):
         return self._execute_cmd("GET", "Appliance.System.Report", {})
 
-class  Mss425e:
+
+class Mss425e:
     _status_lock = None
     _client_status = None
 
@@ -301,6 +327,9 @@ class  Mss425e:
     _uuid = None
     _client_id = None
     _app_id = None
+
+    _device_names = None
+    _device_specs = None
 
     # Topic name where the client should publish to its commands. Every client should have a dedicated one.
     _client_request_topic = None
@@ -350,6 +379,14 @@ class  Mss425e:
 
         self._generate_client_and_app_id()
 
+        self._device_names = [{'name': kwords['devName'], 'channel': 0, 'status': 0, 'device': self}]
+
+        for idx, channels in enumerate(kwords['channels']):
+            if len(channels) != 0:
+                self._device_names.append({'name': channels['devName'], 'channel': idx, 'status': 0, 'device': self})
+
+        self._device_specs = kwords
+
         # Password is calculated as the MD5 of USERID concatenated with KEY
         md5_hash = md5()
         clearpwd = "%s%s" % (self._user_id, self._key)
@@ -357,7 +394,8 @@ class  Mss425e:
         hashed_password = md5_hash.hexdigest()
 
         # Start the mqtt client
-        self._channel = mqtt.Client(client_id=self._client_id, protocol=mqtt.MQTTv311)  # ex. app-id -> app:08d4c9f99da40203ebc798a76512ec14
+        self._channel = mqtt.Client(client_id=self._client_id,
+                                    protocol=mqtt.MQTTv311)  # ex. app-id -> app:08d4c9f99da40203ebc798a76512ec14
         self._channel.on_connect = self._on_connect
         self._channel.on_message = self._on_message
         self._channel.on_disconnect = self._on_disconnect
@@ -365,8 +403,8 @@ class  Mss425e:
         self._channel.on_log = self._on_log
         self._channel.username_pw_set(username=self._user_id, password=hashed_password)
         self._channel.tls_set(ca_certs=None, certfile=None, keyfile=None, cert_reqs=ssl.CERT_REQUIRED,
-                       tls_version=ssl.PROTOCOL_TLS,
-                       ciphers=None)
+                              tls_version=ssl.PROTOCOL_TLS,
+                              ciphers=None)
 
         self._channel.connect(self._domain, self._port, keepalive=30)
         self._set_status(ClientStatus.CONNECTING)
@@ -406,14 +444,14 @@ class  Mss425e:
         self._subscription_count.dec()
 
     def _on_subscribe(self, client, userdata, mid, granted_qos):
-        l.info("Succesfully subscribed!")
+        # l.info("Succesfully subscribed!")
         if self._subscription_count.inc() == 2:
             with self._waiting_subscribers_queue:
                 self._set_status(ClientStatus.SUBSCRIBED)
                 self._waiting_subscribers_queue.notify_all()
 
     def _on_connect(self, client, userdata, rc, other):
-        l.info("Connected with result code %s" % str(rc))
+        # l.info("Connected with result code %s" % str(rc))
         self._set_status(ClientStatus.SUBSCRIBED)
 
         self._set_status(ClientStatus.CONNECTED)
@@ -423,13 +461,13 @@ class  Mss425e:
         self._user_topic = "/app/%s/subscribe" % self._user_id
 
         # Subscribe to the relevant topics
-        l.info("Subscribing to topics..." )
+        # l.info("Subscribing to topics...")
         client.subscribe(self._user_topic)
         client.subscribe(self._client_response_topic)
 
     # The callback for when a PUBLISH message is received from the server.
     def _on_message(self, client, userdata, msg):
-        print(msg.topic + " --> " + str(msg.payload))
+        # print(msg.topic + " --> " + str(msg.payload))
 
         # TODO: Message signature validation
 
@@ -481,17 +519,17 @@ class  Mss425e:
             "header":
                 {
                     "from": self._client_response_topic,
-                    "messageId": messageId, # Example: "122e3e47835fefcd8aaf22d13ce21859"
-                    "method": method, # Example: "GET",
-                    "namespace": namespace, # Example: "Appliance.System.All",
+                    "messageId": messageId,  # Example: "122e3e47835fefcd8aaf22d13ce21859"
+                    "method": method,  # Example: "GET",
+                    "namespace": namespace,  # Example: "Appliance.System.All",
                     "payloadVersion": 1,
-                    "sign": signature, # Example: "b4236ac6fb399e70c3d61e98fcb68b74",
+                    "sign": signature,  # Example: "b4236ac6fb399e70c3d61e98fcb68b74",
                     "timestamp": timestamp
                 },
             "payload": payload
         }
         strdata = json.dumps(data)
-        print("--> %s" % strdata)
+        # print("--> %s" % strdata)
         self._channel.publish(topic=self._client_request_topic, payload=strdata.encode("utf-8"))
         return messageId
 
@@ -521,21 +559,47 @@ class  Mss425e:
 
             return self._ack_response['payload']
 
+    def get_device_specs(self):
+        return self._device_specs
+
+    def set_device_specs(self, specs):
+        self._device_specs = specs
+
+    def get_device_names(self):
+        return self._device_names
+
+    def get_switch_status(self, channel):
+        response = None
+        if 'togglex' in json.dumps(self.get_sys_data()):
+            all_toggle_status = self.get_sys_data()['all']['digest']['togglex']
+            for toggle_status in all_toggle_status:
+                if toggle_status['channel'] == channel:
+                    response = toggle_status['onoff']
+        return response
+
     def get_sys_data(self):
         return self._execute_cmd("GET", "Appliance.System.All", {})
 
-    #def get_power_consumptionX(self):
+    # def get_power_consumptionX(self):
     #    return self._execute_cmd("GET", "Appliance.Control.ConsumptionX", {})
 
     def get_wifi_list(self):
         return self._execute_cmd("GET", "Appliance.Config.WifiList", {})
 
-    def turn_on(self):
-        payload = {"togglex":{"channel":0,"onoff":1}}
+    def turn_on(self, channel):
+        payload = {"togglex": {"channel": channel, "onoff": 1}}
         return self._execute_cmd("SET", "Appliance.Control.ToggleX", payload)
 
-    def turn_off(self):
-        payload = {"togglex":{"channel":1,"onoff":0}}
+    def turn_off(self, channel):
+        payload = {"togglex": {"channel": channel, "onoff": 0}}
+        return self._execute_cmd("SET", "Appliance.Control.ToggleX", payload)
+
+    def turn_on_all(self):
+        payload = {"togglex": {"channel": 0, "onoff": 1}}
+        return self._execute_cmd("SET", "Appliance.Control.ToggleX", payload)
+
+    def turn_off_all(self):
+        payload = {"togglex": {"channel": 0, "onoff": 0}}
         return self._execute_cmd("SET", "Appliance.Control.ToggleX", payload)
 
     def get_trace(self):
@@ -547,7 +611,7 @@ class  Mss425e:
     def get_abilities(self):
         return self._execute_cmd("GET", "Appliance.System.Ability", {})
 
-    #def get_electricity(self):
+    # def get_electricity(self):
     #    return self._execute_cmd("GET", "Appliance.Control.Electricity", {})
 
     def get_report(self):
